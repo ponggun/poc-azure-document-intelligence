@@ -33,9 +33,7 @@ public static class Program
             foreach (var inputPath in inputFiles)
             {
                 string inputFileName = Path.GetFileName(inputPath);
-                string outputPath = Path.Combine(rootDocumentPath, "output");
-                string textOutputPath = Path.Combine(outputPath, Path.ChangeExtension(inputFileName, ".txt"));
-                string jsonOutputPath = Path.Combine(outputPath, Path.ChangeExtension(inputFileName, ".json"));
+                string outputPath = Path.Combine(rootDocumentPath, "output", Path.GetFileNameWithoutExtension(inputPath));
 
                 Console.WriteLine($"Processing: {inputFileName}");
                 Console.WriteLine($"Input path: {inputPath}");
@@ -47,26 +45,35 @@ public static class Program
                     continue;
                 }
 
-                // Create Azure Document Intelligence client
-                var client = new DocumentAnalysisClient(new Uri(endpoint), new AzureKeyCredential(apiKey));
+                // Split PDF into images
+                Console.WriteLine($"Splitting PDF into images...");
+                string imagesOutputDir = Path.Combine(outputPath, "images");
+                string jsonOutputDir = Path.Combine(outputPath, "json");
+                string textOutputDir = Path.Combine(outputPath, "text");
 
-                // Perform OCR
-                Console.WriteLine("Performing OCR with Azure Document Intelligence...");
-                var ocrResult = await PerformOcrAsync(client, inputPath);
+                Directory.CreateDirectory(imagesOutputDir);
+                Directory.CreateDirectory(jsonOutputDir);
+                Directory.CreateDirectory(textOutputDir);
 
-                // Save OCR result as text file
-                Console.WriteLine($"Saving OCR text to: {textOutputPath}");
-                await SaveOcrTextToFileAsync(textOutputPath, ocrResult);
-                Console.WriteLine($"OCR text saved successfully to: {textOutputPath}");
+                var imageFiles = SplitPdfToImages(inputPath, imagesOutputDir);
 
-                // Save OCR result as JSON file
-                Console.WriteLine($"Saving OCR JSON to: {jsonOutputPath}");
-                await SaveOcrJsonToFileAsync(jsonOutputPath, ocrResult);
-                Console.WriteLine($"OCR JSON saved successfully to: {jsonOutputPath}");
+                foreach (var imageFile in imageFiles)
+                {
+                    // Create Azure Document Intelligence client
+                    var client = new DocumentAnalysisClient(new Uri(endpoint), new AzureKeyCredential(apiKey));
 
-                // Create searchable PDF
-                //Console.WriteLine($"Creating searchable PDF: {outputPath}");
-                //await CreateSearchablePdfAsync(outputPath, ocrResult);
+                    // Perform OCR
+                    Console.WriteLine("Performing OCR with Azure Document Intelligence...");
+                    var ocrResult = await PerformOcrAsync(client, imageFile);
+
+                    // Save OCR result as text file
+                    string textOutputPath = Path.Combine(textOutputDir, $"{Path.GetFileNameWithoutExtension(imageFile)}.txt");
+                    await SaveOcrTextToFileAsync(textOutputPath, ocrResult);
+
+                    // Save OCR result as JSON file
+                    string jsonOutputPath = Path.Combine(jsonOutputDir, $"{Path.GetFileNameWithoutExtension(imageFile)}.json");
+                    await SaveOcrJsonToFileAsync(jsonOutputPath, ocrResult);
+                }
 
                 Console.WriteLine("Processing completed successfully!");
             }
@@ -186,7 +193,7 @@ public static class Program
             System.Runtime.InteropServices.Marshal.Copy(rawBytes, 0, bitmap.GetPixels(), rawBytes.Length);
             using var image = SKImage.FromBitmap(bitmap);
             using var data = image.Encode(SKEncodedImageFormat.Png, 100);
-            string outputPath = Path.Combine(outputDir, $"page-{i + 1}.png");
+            string outputPath = Path.Combine(outputDir, $"{Path.GetFileNameWithoutExtension(pdfFilePath)}-{i + 1}.png");
 
             using var fs = File.OpenWrite(outputPath);
             data.SaveTo(fs);
