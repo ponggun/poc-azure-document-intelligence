@@ -48,12 +48,12 @@ public static class Program
                 // Split PDF into images
                 Console.WriteLine($"Splitting PDF into images...");
                 string imagesOutputDir = Path.Combine(outputPath, "images");
-                string jsonOutputDir = Path.Combine(outputPath, "json");
-                string textOutputDir = Path.Combine(outputPath, "text");
+                string jsonAzureOutputDir = Path.Combine(outputPath, "AzureDocumentIntelligence", "json");
+                string textAzureOutputDir = Path.Combine(outputPath, "AzureDocumentIntelligence", "text");
 
                 Directory.CreateDirectory(imagesOutputDir);
-                Directory.CreateDirectory(jsonOutputDir);
-                Directory.CreateDirectory(textOutputDir);
+                Directory.CreateDirectory(jsonAzureOutputDir);
+                Directory.CreateDirectory(textAzureOutputDir);
 
                 var imageFiles = SplitPdfToImages(inputPath, imagesOutputDir);
 
@@ -67,11 +67,11 @@ public static class Program
                     var ocrResult = await PerformOcrAsync(client, imageFile);
 
                     // Save OCR result as text file
-                    string textOutputPath = Path.Combine(textOutputDir, $"{Path.GetFileNameWithoutExtension(imageFile)}.txt");
+                    string textOutputPath = Path.Combine(textAzureOutputDir, $"{Path.GetFileNameWithoutExtension(imageFile)}.txt");
                     await SaveOcrTextToFileAsync(textOutputPath, ocrResult);
 
                     // Save OCR result as JSON file
-                    string jsonOutputPath = Path.Combine(jsonOutputDir, $"{Path.GetFileNameWithoutExtension(imageFile)}.json");
+                    string jsonOutputPath = Path.Combine(jsonAzureOutputDir, $"{Path.GetFileNameWithoutExtension(imageFile)}.json");
                     await SaveOcrJsonToFileAsync(jsonOutputPath, ocrResult);
                 }
 
