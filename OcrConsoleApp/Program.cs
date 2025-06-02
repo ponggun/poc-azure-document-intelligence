@@ -55,43 +55,44 @@ public static class Program
                 string textAzureOutputDir = Path.Combine(outputPath, "AzureDocumentIntelligence", "text");
                 string jsonMistralOutputDir = Path.Combine(outputPath, "MistralOCR", "json");
                 string textMistralOutputDir = Path.Combine(outputPath, "MistralOCR", "text");
+                string mdMistralOutputDir = Path.Combine(outputPath, "MistralOCR", "markdown");
 
                 Directory.CreateDirectory(imagesOutputDir);
                 Directory.CreateDirectory(jsonAzureOutputDir);
                 Directory.CreateDirectory(textAzureOutputDir);
                 Directory.CreateDirectory(jsonMistralOutputDir);
-                Directory.CreateDirectory(textMistralOutputDir);
+                Directory.CreateDirectory(mdMistralOutputDir);
 
-                var imageFiles = SplitPdfToImages(inputPath, imagesOutputDir);
+                var pageImageFiles = SplitPdfToImages(inputPath, imagesOutputDir);
 
-                foreach (var imageFile in imageFiles)
+                foreach (var pageImageFile in pageImageFiles)
                 {
                     // Create Azure Document Intelligence client
                     var client = new DocumentAnalysisClient(new Uri(endpoint), new AzureKeyCredential(apiKey));
 
                     // Perform OCR with Azure Document Intelligence
                     Console.WriteLine("Performing OCR with Azure Document Intelligence...");
-                    var ocrResult = await PerformOcrAsync(client, imageFile);
+                    var ocrResult = await PerformOcrAsync(client, pageImageFile);
 
                     // Save Azure OCR result as text file
-                    string textOutputPath = Path.Combine(textAzureOutputDir, $"{Path.GetFileNameWithoutExtension(imageFile)}.txt");
+                    string textOutputPath = Path.Combine(textAzureOutputDir, $"{Path.GetFileNameWithoutExtension(pageImageFile)}.txt");
                     await SaveOcrTextToFileAsync(textOutputPath, ocrResult);
 
                     // Save Azure OCR result as JSON file
-                    string jsonOutputPath = Path.Combine(jsonAzureOutputDir, $"{Path.GetFileNameWithoutExtension(imageFile)}.json");
+                    string jsonOutputPath = Path.Combine(jsonAzureOutputDir, $"{Path.GetFileNameWithoutExtension(pageImageFile)}.json");
                     await SaveOcrJsonToFileAsync(jsonOutputPath, ocrResult);
 
                     // Perform OCR with Mistral
                     Console.WriteLine("Performing OCR with Mistral...");
-                    var mistralResult = await PerformMistralOcrAsync(mistralApiKey, mistralEndpoint, imageFile);
-
-                    // Save Mistral OCR result as text file
-                    string mistralTextOutputPath = Path.Combine(textMistralOutputDir, $"{Path.GetFileNameWithoutExtension(imageFile)}.txt");
-                    await SaveMistralOcrTextToFileAsync(mistralTextOutputPath, mistralResult);
+                    var (mistralResultRaw, mistralResultObj) = await PerformMistralOcrAsync(mistralApiKey, mistralEndpoint, pageImageFile);
 
                     // Save Mistral OCR result as JSON file
-                    string mistralJsonOutputPath = Path.Combine(jsonMistralOutputDir, $"{Path.GetFileNameWithoutExtension(imageFile)}.json");
-                    await SaveMistralOcrJsonToFileAsync(mistralJsonOutputPath, mistralResult);
+                    string mistralJsonOutputPath = Path.Combine(jsonMistralOutputDir, $"{Path.GetFileNameWithoutExtension(pageImageFile)}.json");
+                    await SaveMistralOcrJsonToFileAsync(mistralJsonOutputPath, mistralResultRaw);
+
+                    // Save Mistral OCR result as md file
+                    string mistralMdOutputPath = Path.Combine(mdMistralOutputDir, $"{Path.GetFileNameWithoutExtension(pageImageFile)}.md");
+                    await SaveMistralOcrMarkdownToFileAsync(mistralMdOutputPath, mistralResultObj);
                 }
 
                 Console.WriteLine("Processing completed successfully!");
@@ -149,7 +150,7 @@ public static class Program
         await File.WriteAllTextAsync(outputPath, json);
     }
 
-    private static async Task<MistralOcrResult> PerformMistralOcrAsync(string apiKey, string endpoint, string filePath)
+    private static async Task<(string, MistralOcrResponse)> PerformMistralOcrAsync(string apiKey, string endpoint, string filePath)
     {
         using var httpClient = new HttpClient();
         httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
@@ -169,79 +170,49 @@ public static class Program
 
         var requestBody = new
         {
-            model = "mistral-large-latest",
-            messages = new[]
+            model = "mistral-ocr-latest",
+            document = new
             {
-                new
-                {
-                    role = "user",
-                    content = new object[]
-                    {
-                        new { type = "text", text = "Please extract all text from this image. Return only the extracted text without any additional formatting or comments." },
-                        new { type = "image_url", image_url = new { url = $"data:{mimeType};base64,{base64Image}" } }
-                    }
-                }
+                type = "image_url",
+                image_url = $"data:{mimeType};base64,{base64Image}"
             },
-            max_tokens = 4000
+            include_image_base64 = true
         };
 
         var jsonContent = JsonSerializer.Serialize(requestBody);
         var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
-        try
-        {
-            var response = await httpClient.PostAsync(endpoint, content);
-            var responseContent = await response.Content.ReadAsStringAsync();
+        var response = await httpClient.PostAsync(endpoint, content);
+        var responseContent = await response.Content.ReadAsStringAsync();
 
-            if (response.IsSuccessStatusCode)
-            {
-                var result = JsonSerializer.Deserialize<MistralApiResponse>(responseContent);
-                return new MistralOcrResult
-                {
-                    ExtractedText = result?.choices?[0]?.message?.content ?? "",
-                    Success = true,
-                    OriginalResponse = responseContent
-                };
-            }
-            else
-            {
-                Console.WriteLine($"Mistral API error: {response.StatusCode} - {responseContent}");
-                return new MistralOcrResult
-                {
-                    ExtractedText = "",
-                    Success = false,
-                    ErrorMessage = $"API Error: {response.StatusCode} - {responseContent}",
-                    OriginalResponse = responseContent
-                };
-            }
-        }
-        catch (Exception ex)
+        if (response.IsSuccessStatusCode)
         {
-            Console.WriteLine($"Mistral OCR error: {ex.Message}");
-            return new MistralOcrResult
+            var ocrResponse = JsonSerializer.Deserialize<MistralOcrResponse>(responseContent, new JsonSerializerOptions
             {
-                ExtractedText = "",
-                Success = false,
-                ErrorMessage = ex.Message,
-                OriginalResponse = ""
-            };
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                PropertyNameCaseInsensitive = true
+            });
+
+            if (ocrResponse == null)
+            {
+                throw new Exception("Failed to deserialize Mistral OCR response.");
+            }
+
+            return (responseContent, ocrResponse);
         }
+
+        throw new Exception($"Mistral OCR API request failed: {response.StatusCode} - {responseContent}");
     }
 
-    private static async Task SaveMistralOcrTextToFileAsync(string outputPath, MistralOcrResult ocrResult)
+    private static async Task SaveMistralOcrJsonToFileAsync(string outputPath, string ocrResult)
     {
-        var textToSave = ocrResult.Success ? ocrResult.ExtractedText : $"Error: {ocrResult.ErrorMessage}";
-        await File.WriteAllTextAsync(outputPath, textToSave);
+        await File.WriteAllTextAsync(outputPath, ocrResult);
     }
 
-    private static async Task SaveMistralOcrJsonToFileAsync(string outputPath, MistralOcrResult ocrResult)
+    // save mistral as md
+    private static async Task SaveMistralOcrMarkdownToFileAsync(string outputPath, MistralOcrResponse ocrResult)
     {
-        var json = JsonSerializer.Serialize(ocrResult, new JsonSerializerOptions
-        {
-            WriteIndented = true,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-        });
-        await File.WriteAllTextAsync(outputPath, json);
+        await File.WriteAllTextAsync(outputPath, ocrResult.pages[0].markdown);
     }
 
     private static Task CreateSearchablePdfAsync(string outputPath, string ocrText)
@@ -320,27 +291,4 @@ public static class Program
 
         return outputFiles;
     }
-}
-
-public class MistralOcrResult
-{
-    public string ExtractedText { get; set; } = "";
-    public bool Success { get; set; }
-    public string ErrorMessage { get; set; } = "";
-    public string OriginalResponse { get; set; } = "";
-}
-
-public class MistralApiResponse
-{
-    public MistralChoice[]? choices { get; set; }
-}
-
-public class MistralChoice
-{
-    public MistralMessage? message { get; set; }
-}
-
-public class MistralMessage
-{
-    public string? content { get; set; }
 }
